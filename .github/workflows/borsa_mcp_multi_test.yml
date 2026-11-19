@@ -1,5 +1,5 @@
 
-name: Borsa MCP - Financial Tools Discovery
+name: Borsa MCP - Financial Data Test
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ permissions:
 jobs:
   financial-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Depoyu indir
@@ -27,7 +27,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
-      - name: Finansal araclari bul
+      - name: Dört hissenin finansal tablolarini getir
         working-directory: borsa-mcp
         run: |
           python - <<'PY'
@@ -36,23 +36,34 @@ jobs:
           from unified_mcp_server import app
 
           async def main():
+              tickers = ["GARAN", "ISCTR", "AKBNK", "TSKB"]
+
               async with Client(app) as client:
-                  tools = await client.list_tools()
-                  found = 0
+                  print("Finansal tablo sorgusu basliyor...")
 
-                  print("\n--- BILANCO VE FINANSAL ARACLAR ---")
+                  result = await client.call_tool(
+                      "get_financial_statements",
+                      {
+                          "symbol": tickers,
+                          "market": "bist",
+                          "statement_type": "all",
+                          "period": "quarterly",
+                          "last_n": 8
+                      }
+                  )
 
-                  for tool in tools:
-                      name = tool.name.lower()
-                      if any(word in name for word in [
-                          "financial", "statement", "balance",
-                          "bilanco", "income", "cash_flow"
-                      ]):
-                          found += 1
-                          print("\nARAC:", tool.name)
-                          print("PARAMETRELER:", tool.inputSchema)
+              if result.is_error:
+                  raise RuntimeError(str(result))
 
-                  print("\nTOPLAM BULUNAN:", found)
+              if not result.content:
+                  raise RuntimeError("Finansal veri bos geldi.")
+
+              print("\n--- DORT BANKA FINANSAL TABLOLARI ---")
+
+              for item in result.content:
+                  print(getattr(item, "text", str(item)))
+
+              print("\nFINANSAL VERI TESTI TAMAMLANDI.")
 
           asyncio.run(main())
           PY
