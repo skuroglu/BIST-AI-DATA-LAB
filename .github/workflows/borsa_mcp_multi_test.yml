@@ -10,7 +10,7 @@ permissions:
 jobs:
   financial-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: Depoyu indir
@@ -27,7 +27,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
-      - name: Dört hissenin finansal tablolarini getir
+      - name: Finansal tablolar ve finansal oranlar testi
         working-directory: borsa-mcp
         run: |
           python - <<'PY'
@@ -39,9 +39,10 @@ jobs:
               tickers = ["GARAN", "ISCTR", "AKBNK", "TSKB"]
 
               async with Client(app) as client:
-                  print("Finansal tablo sorgusu basliyor...")
 
-                  result = await client.call_tool(
+                  print("\n========== 1. FINANSAL TABLOLAR ==========")
+
+                  statements = await client.call_tool(
                       "get_financial_statements",
                       {
                           "symbol": tickers,
@@ -52,18 +53,39 @@ jobs:
                       }
                   )
 
-              if result.is_error:
-                  raise RuntimeError(str(result))
+                  if statements.is_error:
+                      raise RuntimeError(
+                          f"Finansal tablolar hatasi: {statements}"
+                      )
 
-              if not result.content:
-                  raise RuntimeError("Finansal veri bos geldi.")
+                  for item in statements.content:
+                      print(getattr(item, "text", str(item)))
 
-              print("\n--- DORT BANKA FINANSAL TABLOLARI ---")
+                  print("\n========== 2. FINANCIAL RATIOS ==========")
 
-              for item in result.content:
-                  print(getattr(item, "text", str(item)))
+                  ratios = await client.call_tool(
+                      "get_financial_ratios",
+                      {
+                          "symbol": tickers,
+                          "market": "bist",
+                          "ratio_set": "comprehensive"
+                      }
+                  )
 
-              print("\nFINANSAL VERI TESTI TAMAMLANDI.")
+                  if ratios.is_error:
+                      raise RuntimeError(
+                          f"Financial ratios hatasi: {ratios}"
+                      )
+
+                  if not ratios.content:
+                      raise RuntimeError(
+                          "Financial ratios verisi bos geldi."
+                      )
+
+                  for item in ratios.content:
+                      print(getattr(item, "text", str(item)))
+
+                  print("\n========== TEST TAMAMLANDI ==========")
 
           asyncio.run(main())
           PY
