@@ -31,7 +31,9 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           git add borsa-mcp
+          git add -f borsa-mcp/borsa_models.py
 
           if git diff --cached --quiet; then
             echo "No changes to import."
