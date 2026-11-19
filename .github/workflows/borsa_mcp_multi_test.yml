@@ -1,5 +1,5 @@
 
-name: Borsa MCP - Multi Stock Test
+name: Borsa MCP - Financial Tools Discovery
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  multi-test:
+  financial-test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -27,7 +27,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
-      - name: Dort hisse kurumsal islemlerini sorgula
+      - name: Finansal araclari bul
         working-directory: borsa-mcp
         run: |
           python - <<'PY'
@@ -36,31 +36,23 @@ jobs:
           from unified_mcp_server import app
 
           async def main():
-              tickers = ["GARAN", "ISCTR", "AKBNK", "TSKB"]
-
               async with Client(app) as client:
-                  print("Dort hisse sorgusu basliyor:", tickers)
+                  tools = await client.list_tools()
+                  found = 0
 
-                  result = await client.call_tool(
-                      "get_corporate_actions",
-                      {
-                          "symbol": tickers,
-                          "market": "bist"
-                      }
-                  )
+                  print("\n--- BILANCO VE FINANSAL ARACLAR ---")
 
-              if result.is_error:
-                  raise RuntimeError(str(result))
+                  for tool in tools:
+                      name = tool.name.lower()
+                      if any(word in name for word in [
+                          "financial", "statement", "balance",
+                          "bilanco", "income", "cash_flow"
+                      ]):
+                          found += 1
+                          print("\nARAC:", tool.name)
+                          print("PARAMETRELER:", tool.inputSchema)
 
-              if not result.content:
-                  raise RuntimeError("Sunucu bos yanit dondurdu.")
-
-              print("\n--- KURUMSAL ISLEMLER SONUCU ---")
-
-              for item in result.content:
-                  print(getattr(item, "text", str(item)))
-
-              print("\nCANLI COKLU HISSE TESTI TAMAMLANDI.")
+                  print("\nTOPLAM BULUNAN:", found)
 
           asyncio.run(main())
           PY
