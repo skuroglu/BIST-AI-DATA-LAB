@@ -1,5 +1,5 @@
 
-name: Borsa MCP - Test
+name: Borsa MCP - Live BIST Test
 
 on:
   workflow_dispatch:
@@ -8,9 +8,9 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  live-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
 
     steps:
       - name: Depoyu indir
@@ -21,12 +21,48 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Paketleri kur
+      - name: Borsa MCP paketini kur
+        working-directory: borsa-mcp
         run: |
           python -m pip install --upgrade pip
-          pip install -e ./borsa-mcp
-          pip install pytest pytest-asyncio
+          pip install -e .
 
-      - name: Çevrimdışı testleri çalıştır
+      - name: GARAN canlı geçmiş verisini çek
         working-directory: borsa-mcp
-        run: python -m pytest -q -k "not test_claude_md_does_not_present_removed_tools_as_available and not test_claude_md_states_the_real_tool_count and not test_live_golden_values"
+        run: |
+          python - <<'PY'
+          import asyncio
+          from fastmcp import Client
+          from unified_mcp_server import app
+
+          async def main():
+              print("GARAN canlı veri sorgusu başlıyor...")
+
+              async with Client(app) as client:
+                  result = await client.call_tool(
+                      "get_historical_data",
+                      {
+                          "symbol": "GARAN",
+                          "market": "bist",
+                          "period": "1mo"
+                      }
+                  )
+
+              if result.isError:
+                  raise RuntimeError("BIST veri sorgusu başarısız.")
+
+              if not result.content:
+                  raise RuntimeError("Sunucu boş yanıt döndürdü.")
+
+              print("\n--- GARAN SON 1 AY VERİSİ ---")
+
+              for item in result.content:
+                  if hasattr(item, "text"):
+                      print(item.text)
+                  else:
+                      print(item)
+
+              print("\nCANLI BIST VERİ TESTİ BAŞARILI.")
+
+          asyncio.run(main())
+          PY
