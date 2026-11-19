@@ -27,7 +27,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
-      - name: Gercek arac isimlerini bul
+      - name: Dort hisse kurumsal islemlerini sorgula
         working-directory: borsa-mcp
         run: |
           python - <<'PY'
@@ -36,26 +36,31 @@ jobs:
           from unified_mcp_server import app
 
           async def main():
+              tickers = ["GARAN", "ISCTR", "AKBNK", "TSKB"]
+
               async with Client(app) as client:
-                  tools = await client.list_tools()
+                  print("Dort hisse sorgusu basliyor:", tickers)
 
-                  print("\n--- SISTEMDEKI TEMETTU VE KURUMSAL ISLEM ARACLARI ---")
+                  result = await client.call_tool(
+                      "get_corporate_actions",
+                      {
+                          "symbol": tickers,
+                          "market": "bist"
+                      }
+                  )
 
-                  found = 0
-                  for tool in tools:
-                      name = tool.name.lower()
-                      if any(word in name for word in [
-                          "dividend", "temettu", "corporate",
-                          "action", "sermaye"
-                      ]):
-                          found += 1
-                          print("\nARAC:", tool.name)
-                          print("PARAMETRELER:", tool.inputSchema)
+              if result.is_error:
+                  raise RuntimeError(str(result))
 
-                  if found == 0:
-                      print("Bu isimlerle eslesen arac bulunamadi.")
+              if not result.content:
+                  raise RuntimeError("Sunucu bos yanit dondurdu.")
 
-                  print("\nTOPLAM ESLESEN ARAC:", found)
+              print("\n--- KURUMSAL ISLEMLER SONUCU ---")
+
+              for item in result.content:
+                  print(getattr(item, "text", str(item)))
+
+              print("\nCANLI COKLU HISSE TESTI TAMAMLANDI.")
 
           asyncio.run(main())
           PY
