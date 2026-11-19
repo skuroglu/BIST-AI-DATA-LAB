@@ -27,7 +27,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
-      - name: Finansal tablolar ve finansal oranlar testi
+      - name: Finansal tablolar ve oranlar testi
         working-directory: borsa-mcp
         run: |
           python - <<'PY'
@@ -58,6 +58,9 @@ jobs:
                           f"Finansal tablolar hatasi: {statements}"
                       )
 
+                  if not statements.content:
+                      raise RuntimeError("Finansal tablolar bos geldi.")
+
                   for item in statements.content:
                       print(getattr(item, "text", str(item)))
 
@@ -78,14 +81,12 @@ jobs:
                       )
 
                   if not ratios.content:
-                      raise RuntimeError(
-                          "Financial ratios verisi bos geldi."
-                      )
+                      raise RuntimeError("Financial ratios verisi bos geldi.")
 
                   for item in ratios.content:
                       print(getattr(item, "text", str(item)))
 
-                  print("\n========== TEST TAMAMLANDI ==========")
+                  print("\n========== IKI TEST DE TAMAMLANDI ==========")
 
           asyncio.run(main())
           PY
