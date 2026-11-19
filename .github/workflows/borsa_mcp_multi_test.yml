@@ -27,7 +27,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
-      - name: Dört hisse temettü verisini sorgula
+      - name: Gercek arac isimlerini bul
         working-directory: borsa-mcp
         run: |
           python - <<'PY'
@@ -38,31 +38,24 @@ jobs:
           async def main():
               async with Client(app) as client:
                   tools = await client.list_tools()
-                  tool = next(
-                      (t for t in tools if t.name == "get_dividends"),
-                      None
-                  )
 
-                  if tool is None:
-                      raise RuntimeError("get_dividends aracı bulunamadı.")
+                  print("\n--- SISTEMDEKI TEMETTU VE KURUMSAL ISLEM ARACLARI ---")
 
-                  print("Araç parametreleri:")
-                  print(tool.inputSchema)
+                  found = 0
+                  for tool in tools:
+                      name = tool.name.lower()
+                      if any(word in name for word in [
+                          "dividend", "temettu", "corporate",
+                          "action", "sermaye"
+                      ]):
+                          found += 1
+                          print("\nARAC:", tool.name)
+                          print("PARAMETRELER:", tool.inputSchema)
 
-                  result = await client.call_tool(
-                      "get_dividends",
-                      {
-                          "symbol": ["GARAN", "ISCTR", "AKBNK", "TSKB"],
-                          "market": "bist"
-                      }
-                  )
+                  if found == 0:
+                      print("Bu isimlerle eslesen arac bulunamadi.")
 
-                  if result.is_error:
-                      raise RuntimeError(str(result))
-
-                  print("\n--- DÖRT HİSSE SONUCU ---")
-                  for item in result.content:
-                      print(getattr(item, "text", str(item)))
+                  print("\nTOPLAM ESLESEN ARAC:", found)
 
           asyncio.run(main())
           PY
