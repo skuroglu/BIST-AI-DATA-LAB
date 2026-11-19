@@ -1,0 +1,68 @@
+
+name: Borsa MCP - Multi Stock Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  multi-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Depoyu indir
+        uses: actions/checkout@v4
+
+      - name: Python kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Paketi kur
+        working-directory: borsa-mcp
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Dört hisse temettü verisini sorgula
+        working-directory: borsa-mcp
+        run: |
+          python - <<'PY'
+          import asyncio
+          from fastmcp import Client
+          from unified_mcp_server import app
+
+          async def main():
+              async with Client(app) as client:
+                  tools = await client.list_tools()
+                  tool = next(
+                      (t for t in tools if t.name == "get_dividends"),
+                      None
+                  )
+
+                  if tool is None:
+                      raise RuntimeError("get_dividends aracı bulunamadı.")
+
+                  print("Araç parametreleri:")
+                  print(tool.inputSchema)
+
+                  result = await client.call_tool(
+                      "get_dividends",
+                      {
+                          "symbol": ["GARAN", "ISCTR", "AKBNK", "TSKB"],
+                          "market": "bist"
+                      }
+                  )
+
+                  if result.is_error:
+                      raise RuntimeError(str(result))
+
+                  print("\n--- DÖRT HİSSE SONUCU ---")
+                  for item in result.content:
+                      print(getattr(item, "text", str(item)))
+
+          asyncio.run(main())
+          PY
