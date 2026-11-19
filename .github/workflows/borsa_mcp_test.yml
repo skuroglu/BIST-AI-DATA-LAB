@@ -48,8 +48,8 @@ jobs:
                       }
                   )
 
-              if result.isError:
-                  raise RuntimeError("BIST veri sorgusu başarısız.")
+              if result.is_error:
+                  raise RuntimeError(str(result))
 
               if not result.content:
                   raise RuntimeError("Sunucu boş yanıt döndürdü.")
