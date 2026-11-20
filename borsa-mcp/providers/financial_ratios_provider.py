@@ -33,54 +33,70 @@ class FinancialRatiosProvider:
         text = text.replace("ı", "i")
         return re.sub(r"[^a-z0-9]+", "", text)
 
-    def _extract_field(self, tablo: list, kalem_name: str) -> Optional[float]:
-        """Extract the latest value using explicit Turkish/English statement aliases.
-
-        Unknown labels remain missing; the method never guesses a financial item.
-        """
+    def _extract_field(self, tablo: Any, kalem_name: str) -> Optional[float]:
+        """Extract the newest value from either normalized rows or raw Borsapy data."""
         if not tablo:
             return None
 
         aliases = {
-            "netincome": {"netincome", "netprofit", "netprofitloss", "donemkari", "donemnetkari", "donemkarizarari", "netdonemkari", "donemnetkarizarari", "sur durulenfaaliyetlerdonemkarizarari"},
+            "netincome": {"netincome", "netprofit", "netprofitloss", "donemkari", "donemnetkari", "donemkarizarari", "netdonemkari", "donemnetkarizarari", "surdurulenfaaliyetlerdonemnetkarizarari"},
             "totalequitygrossminorityinterest": {"totalequitygrossminorityinterest", "stockholdersequity", "totalequity", "toplamozkaynaklar", "ozkaynaklar", "anaortaklikpaylarinaaitozkaynaklar"},
             "stockholdersequity": {"stockholdersequity", "totalequitygrossminorityinterest", "totalequity", "toplamozkaynaklar", "ozkaynaklar"},
             "totalequity": {"totalequity", "totalequitygrossminorityinterest", "stockholdersequity", "toplamozkaynaklar", "ozkaynaklar"},
-            "operatingincome": {"operatingincome", "incomefromoperations", "faaliyetkari", "esasfaaliyetkari", "esasfaaliyetlerdenkar", "esasfaaliyetlerdenkarzarar"},
+            "operatingincome": {"operatingincome", "incomefromoperations", "faaliyetkari", "faaliyetkarizarari", "esasfaaliyetkari", "esasfaaliyetlerdenkar", "esasfaaliyetlerdenkarzarar"},
             "operatingrevenue": {"operatingrevenue", "revenuefromoperations", "hasilat", "satisgelirleri", "esasfaaliyetgelirleri"},
             "operatingexpense": {"operatingexpense", "operatingexpenses", "faaliyetgiderleri", "esasfaaliyetgiderleri"},
-            "pretaxincome": {"pretaxincome", "incomebeforetax", "vergi oncesikari", "vergioncesikari"},
-            "taxprovision": {"taxprovision", "incometaxexpense", "vergigideri", "vergigeliri", "sur durulenfaaliyetlervergigelirigideri"},
+            "pretaxincome": {"pretaxincome", "incomebeforetax", "vergioncesikari"},
+            "taxprovision": {"taxprovision", "incometaxexpense", "vergigideri", "vergigeliri", "donemvergigelirigideri"},
             "investedcapital": {"investedcapital", "yatirilmissermaye"},
-            "totaldebt": {"totaldebt", "toplamborc", "finansalborclar", "kisa veuzunvadeli finansalborclar"},
+            "totaldebt": {"totaldebt", "toplamborc", "finansalborclar"},
             "totalassets": {"totalassets", "toplamvarliklar", "toplamaktif"},
-            "cashandcashequivalents": {"cashandcashequivalents", "nakitvenakitbenzerleri", "nakitbenzerleri", "nakitvenakitbenzerleri"},
-            "currentdebt": {"currentdebt", "shorttermdebt", "k isavadelifinansalborclar", "kisavadelifinansalborclar"},
+            "cashandcashequivalents": {"cashandcashequivalents", "nakitvenakitbenzerleri", "nakitbenzerleri"},
+            "currentdebt": {"currentdebt", "shorttermdebt", "kisavadelifinansalborclar"},
             "interestexpense": {"interestexpense", "financecosts", "finansmangiderleri", "faizgiderleri"},
             "freecashflow": {"freecashflow", "serbestnakitakim"},
             "operatingcashflow": {"operatingcashflow", "isletmefaaliyetlerindenkaynaklanannetnakit", "esasfaaliyetileilgiliolusannakit"},
-            "changeinworkingcapital": {"changeinworkingcapital", "isletmesermayesindeki degisiklikler", "isletmesermayesindegisiklikler"},
+            "changeinworkingcapital": {"changeinworkingcapital", "isletmesermayesindekidegisiklikler"},
             "depreciationandamortization": {"depreciationandamortization", "amortismanitfapaylari", "amortismangiderleri"},
             "capitalexpenditure": {"capitalexpenditure", "sabitsermayeyatirimlari"},
         }
-        target = self._normalize_statement_label(kalem_name)
-        accepted = {self._normalize_statement_label(item) for item in aliases.get(target, {target})}
-        for row in tablo:
-            label = self._normalize_statement_label(row.get('Kalem', ''))
-            if label not in accepted:
-                continue
-            date_keys = [k for k in row.keys() if k != 'Kalem']
-            if not date_keys:
-                continue
-            # Provider tables are normally newest-first; preserve that ordering.
-            value = row.get(date_keys[0])
-            if value is None or pd.isna(value):
-                continue
-            try:
-                return float(value)
-            except (TypeError, ValueError):
-                logger.warning("Non-numeric value for statement item %s: %r", row.get('Kalem'), value)
-                return None
+        normalize = self._normalize_statement_label
+        target = normalize(kalem_name)
+        accepted = {normalize(item) for item in aliases.get(target, {target})}
+
+        # Raw Borsapy: {periods: [...], data: {label: [v1, v2, ...]}}
+        if isinstance(tablo, dict) and isinstance(tablo.get("data"), dict):
+            periods = tablo.get("periods") or []
+            for raw_label, values in tablo["data"].items():
+                if normalize(raw_label) not in accepted or not isinstance(values, (list, tuple)):
+                    continue
+                for value in values:
+                    if value is None or pd.isna(value):
+                        continue
+                    try:
+                        return float(value)
+                    except (TypeError, ValueError):
+                        continue
+            return None
+
+        # Some adapters wrap the raw statement in a one-item list.
+        if isinstance(tablo, list) and len(tablo) == 1 and isinstance(tablo[0], dict) and isinstance(tablo[0].get("data"), dict):
+            return self._extract_field(tablo[0], kalem_name)
+
+        # Normalized adapter: [{Kalem: label, date: value}, ...]
+        if isinstance(tablo, list):
+            for row in tablo:
+                if not isinstance(row, dict) or normalize(row.get('Kalem', row.get('kalem', ''))) not in accepted:
+                    continue
+                date_keys = [k for k in row.keys() if str(k).lower() not in {'kalem', 'label', 'name'}]
+                for key in date_keys:
+                    value = row.get(key)
+                    if value is None or pd.isna(value):
+                        continue
+                    try:
+                        return float(value)
+                    except (TypeError, ValueError):
+                        continue
         return None
 
     def _assess_roe(self, roe_percent: float, market: str = "BIST") -> str:
@@ -482,15 +498,8 @@ class FinancialRatiosProvider:
                     operating_income = operating_revenue - operating_expense
                     logger.info(f"Using Operating Revenue - Operating Expense for {ticker_kodu} (bank): {operating_income:,.0f}")
 
-            # Fallback 2: Use Pretax Income as proxy (less ideal but better than nothing)
             if operating_income is None:
-                pretax_income = self._extract_field(income_result.get('tablo', []), 'Pretax Income')
-                if pretax_income:
-                    operating_income = pretax_income
-                    logger.info(f"Using Pretax Income as Operating Income proxy for {ticker_kodu}: {operating_income:,.0f}")
-
-            if operating_income is None:
-                return {'error': 'Operating Income not found (tried Operating Income, Operating Revenue-Expense, Pretax Income)', 'roic_percent': 0}
+                return {'error': 'Operating Income not found (tried Operating Income and Operating Revenue-Expense)', 'roic_percent': 0}
 
             # Extract Tax Provision and calculate tax rate
             tax_provision = self._extract_field(income_result.get('tablo', []), 'Tax Provision')
