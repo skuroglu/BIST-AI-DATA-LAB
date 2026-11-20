@@ -42,21 +42,26 @@ class FinancialRatiosProvider:
             return None
 
         aliases = {
-            "netincome": {"netincome", "netprofit", "netprofitloss", "donemkari", "donemnetkari", "donemkarizarari", "netdonemkari"},
+            "netincome": {"netincome", "netprofit", "netprofitloss", "donemkari", "donemnetkari", "donemkarizarari", "netdonemkari", "donemnetkarizarari", "sur durulenfaaliyetlerdonemkarizarari"},
             "totalequitygrossminorityinterest": {"totalequitygrossminorityinterest", "stockholdersequity", "totalequity", "toplamozkaynaklar", "ozkaynaklar", "anaortaklikpaylarinaaitozkaynaklar"},
             "stockholdersequity": {"stockholdersequity", "totalequitygrossminorityinterest", "totalequity", "toplamozkaynaklar", "ozkaynaklar"},
             "totalequity": {"totalequity", "totalequitygrossminorityinterest", "stockholdersequity", "toplamozkaynaklar", "ozkaynaklar"},
-            "operatingincome": {"operatingincome", "income fromoperations", "faaliyetkari", "esasfaaliyetkari", "esasfaaliyetlerdenkar"},
-            "operatingrevenue": {"operatingrevenue", "revenuefromoperations", "hasil at", "has ilat", "satisgelirleri", "esasfaaliyetgelirleri"},
+            "operatingincome": {"operatingincome", "incomefromoperations", "faaliyetkari", "esasfaaliyetkari", "esasfaaliyetlerdenkar", "esasfaaliyetlerdenkarzarar"},
+            "operatingrevenue": {"operatingrevenue", "revenuefromoperations", "hasilat", "satisgelirleri", "esasfaaliyetgelirleri"},
             "operatingexpense": {"operatingexpense", "operatingexpenses", "faaliyetgiderleri", "esasfaaliyetgiderleri"},
             "pretaxincome": {"pretaxincome", "incomebeforetax", "vergi oncesikari", "vergioncesikari"},
-            "taxprovision": {"taxprovision", "incometaxexpense", "vergigideri", "vergigeliri"},
+            "taxprovision": {"taxprovision", "incometaxexpense", "vergigideri", "vergigeliri", "sur durulenfaaliyetlervergigelirigideri"},
             "investedcapital": {"investedcapital", "yatirilmissermaye"},
             "totaldebt": {"totaldebt", "toplamborc", "finansalborclar", "kisa veuzunvadeli finansalborclar"},
             "totalassets": {"totalassets", "toplamvarliklar", "toplamaktif"},
-            "cashandcashequivalents": {"cashandcashequivalents", "nakitvenakitbenzerleri", "nakitbenzerleri"},
+            "cashandcashequivalents": {"cashandcashequivalents", "nakitvenakitbenzerleri", "nakitbenzerleri", "nakitvenakitbenzerleri"},
             "currentdebt": {"currentdebt", "shorttermdebt", "k isavadelifinansalborclar", "kisavadelifinansalborclar"},
             "interestexpense": {"interestexpense", "financecosts", "finansmangiderleri", "faizgiderleri"},
+            "freecashflow": {"freecashflow", "serbestnakitakim"},
+            "operatingcashflow": {"operatingcashflow", "isletmefaaliyetlerindenkaynaklanannetnakit", "esasfaaliyetileilgiliolusannakit"},
+            "changeinworkingcapital": {"changeinworkingcapital", "isletmesermayesindeki degisiklikler", "isletmesermayesindegisiklikler"},
+            "depreciationandamortization": {"depreciationandamortization", "amortismanitfapaylari", "amortismangiderleri"},
+            "capitalexpenditure": {"capitalexpenditure", "sabitsermayeyatirimlari"},
         }
         target = self._normalize_statement_label(kalem_name)
         accepted = {self._normalize_statement_label(item) for item in aliases.get(target, {target})}
