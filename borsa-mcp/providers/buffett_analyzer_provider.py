@@ -718,9 +718,9 @@ class BuffettAnalyzerProvider:
                 return re.sub(r"[^a-z0-9]+", "", text)
 
             statement_aliases = {
-                'netincome': {'netincome', 'netprofit', 'netprofitloss', 'donemkari', 'donemnetkari', 'donemkarizarari'},
-                'depreciationandamortization': {'depreciationandamortization', 'depreciationdepletionandamortization', 'amortismanvegiderler', 'amortismanve itfa paylari', 'amortismanveitfapaylari'},
-                'capitalexpenditure': {'capitalexpenditure', 'capitalexpenditures', 'capex', 'maddiduranvarlikalimlari', 'maddi duranvarlikalimlari', 'maddi duran varlikalimlari'},
+                'netincome': {'netincome', 'netprofit', 'netprofitloss', 'donemkari', 'donemnetkari', 'donemkarizarari', 'donemnetkarizarari', 'sur durulenfaaliyetlerdonemkarizarari'},
+                'depreciationandamortization': {'depreciationandamortization', 'depreciationdepletionandamortization', 'amortismanvegiderler', 'amortismanveitfapaylari', 'amortismanitfapaylari', 'amortismangiderleri'},
+                'capitalexpenditure': {'capitalexpenditure', 'capitalexpenditures', 'capex', 'maddiduranvarlikalimlari', 'maddiduranvarlikalimlari', 'sabitsermayeyatirimlari'},
                 'currentassets': {'currentassets', 'donenvarliklar'},
                 'currentliabilities': {'currentliabilities', 'shorttermliabilities', 'kisavadeliyukumlulukler'},
             }
@@ -776,6 +776,14 @@ class BuffettAnalyzerProvider:
                     'buffett_score_rationale': 'Eksik nakit akışı verisi nedeniyle AVOID kararı üretilmedi.',
                     'warnings': ['Eksik finansal kalemler: ' + ', '.join(missing_inputs)],
                     'data_quality_notes': 'Eksik alanlar sıfır kabul edilmedi; Owner Earnings ve DCF hesaplanmadı.'
+                }
+            if latest_period != depreciation_period:
+                return {
+                    'error': f'Gelir tablosu ve nakit akışı dönemleri uyuşmuyor: income={latest_period}, cashflow={depreciation_period}',
+                    'ticker': ticker_kodu, 'period': latest_period, 'market': market,
+                    'analysis_status': 'DATA_INSUFFICIENT', 'buffett_score': 'DATA_INSUFFICIENT',
+                    'buffett_score_rationale': 'Dönem eşleşmesi doğrulanamadığı için AVOID kararı üretilmedi.',
+                    'data_quality_notes': 'Net kâr ile amortisman/CapEx aynı raporlama dönemine ait değil; Owner Earnings hesaplanmadı.'
                 }
             if depreciation_period != capex_period:
                 return {
@@ -847,31 +855,31 @@ class BuffettAnalyzerProvider:
                 if market == "US":
                     error_msg = (
                         f"Negative Owner Earnings: {owner_earnings:,.2f}M {currency}. "
-                        f"Company not generating real cash flow (losing money). "
+                        f"Calculated Owner Earnings are negative; verify cash-flow period and CapEx classification. "
                         f"Not suitable for Buffett value investing. "
                         f"Details: Net Income={net_income:,.2f}M, Depreciation={depreciation:,.2f}M, "
                         f"CapEx={capex:,.2f}M, ΔWC={working_capital_change:,.2f}M"
                     )
-                    rationale = f'Negative Owner Earnings ({owner_earnings:,.2f}M {currency}) - Company burning cash'
+                    rationale = f'Negative Owner Earnings ({owner_earnings:,.2f}M {currency}) - Negative calculated Owner Earnings'
                     warnings_list = [
                         f'❌ Negative Owner Earnings: {owner_earnings:,.2f}M {currency}',
                         f'❌ Net Income: {net_income:,.2f}M {currency} ({"loss" if net_income < 0 else "profit"})',
-                        '⚠️ Company not generating sustainable cash flow'
+                        '⚠️ Negative Owner Earnings; verify CapEx and period alignment'
                     ]
                     data_quality = f'Financial data available but company losing money (Period: {latest_period})'
                 else:
                     error_msg = (
                         f"Negatif Owner Earnings: {owner_earnings:,.2f}M {currency}. "
-                        f"Şirket gerçek nakit akışı üretmiyor (zarar ediyor). "
+                        f"Hesaplanan Owner Earnings negatif; nakit akışı dönemi ve CapEx sınıflaması doğrulanmalıdır. "
                         f"Buffett değer yatırımı için uygun değil. "
                         f"Detay: Net Income={net_income:,.2f}M, Depreciation={depreciation:,.2f}M, "
                         f"CapEx={capex:,.2f}M, ΔWC={working_capital_change:,.2f}M"
                     )
-                    rationale = f'Negatif Owner Earnings ({owner_earnings:,.2f}M {currency}) - Şirket nakit yakıyor'
+                    rationale = f'Negatif Owner Earnings ({owner_earnings:,.2f}M {currency}) - Hesaplanan Owner Earnings negatif'
                     warnings_list = [
                         f'❌ Negatif Owner Earnings: {owner_earnings:,.2f}M {currency}',
                         f'❌ Net Income: {net_income:,.2f}M {currency} ({"zarar" if net_income < 0 else "kar"})',
-                        '⚠️ Şirket sürdürülebilir nakit akışı üretmiyor'
+                        '⚠️ Owner Earnings negatif; CapEx ve dönem eşleşmesi kontrol edilmeli'
                     ]
                     data_quality = f'Finansal veri mevcut ama şirket zarar ediyor (Period: {latest_period})'
 
