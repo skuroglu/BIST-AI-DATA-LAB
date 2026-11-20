@@ -5,6 +5,7 @@ Calculates financial ratios and metrics for value investing analysis.
 
 import logging
 import unicodedata
+import re
 from typing import Optional, Dict, Any
 import pandas as pd
 
@@ -24,19 +25,57 @@ class FinancialRatiosProvider:
         """
         self.data_provider = data_provider
 
+    @staticmethod
+    def _normalize_statement_label(value: Any) -> str:
+        """Normalize Turkish/English statement labels for safe alias matching."""
+        text = unicodedata.normalize("NFKD", str(value or ""))
+        text = "".join(ch for ch in text if not unicodedata.combining(ch)).lower()
+        text = text.replace("ı", "i")
+        return re.sub(r"[^a-z0-9]+", "", text)
+
     def _extract_field(self, tablo: list, kalem_name: str) -> Optional[float]:
-        """Extract a field value from financial statement table."""
+        """Extract the latest value using explicit Turkish/English statement aliases.
+
+        Unknown labels remain missing; the method never guesses a financial item.
+        """
         if not tablo:
             return None
 
+        aliases = {
+            "netincome": {"netincome", "netprofit", "netprofitloss", "donemkari", "donemnetkari", "donemkarizarari", "netdonemkari"},
+            "totalequitygrossminorityinterest": {"totalequitygrossminorityinterest", "stockholdersequity", "totalequity", "toplamozkaynaklar", "ozkaynaklar", "anaortaklikpaylarinaaitozkaynaklar"},
+            "stockholdersequity": {"stockholdersequity", "totalequitygrossminorityinterest", "totalequity", "toplamozkaynaklar", "ozkaynaklar"},
+            "totalequity": {"totalequity", "totalequitygrossminorityinterest", "stockholdersequity", "toplamozkaynaklar", "ozkaynaklar"},
+            "operatingincome": {"operatingincome", "income fromoperations", "faaliyetkari", "esasfaaliyetkari", "esasfaaliyetlerdenkar"},
+            "operatingrevenue": {"operatingrevenue", "revenuefromoperations", "hasil at", "has ilat", "satisgelirleri", "esasfaaliyetgelirleri"},
+            "operatingexpense": {"operatingexpense", "operatingexpenses", "faaliyetgiderleri", "esasfaaliyetgiderleri"},
+            "pretaxincome": {"pretaxincome", "incomebeforetax", "vergi oncesikari", "vergioncesikari"},
+            "taxprovision": {"taxprovision", "incometaxexpense", "vergigideri", "vergigeliri"},
+            "investedcapital": {"investedcapital", "yatirilmissermaye"},
+            "totaldebt": {"totaldebt", "toplamborc", "finansalborclar", "kisa veuzunvadeli finansalborclar"},
+            "totalassets": {"totalassets", "toplamvarliklar", "toplamaktif"},
+            "cashandcashequivalents": {"cashandcashequivalents", "nakitvenakitbenzerleri", "nakitbenzerleri"},
+            "currentdebt": {"currentdebt", "shorttermdebt", "k isavadelifinansalborclar", "kisavadelifinansalborclar"},
+            "interestexpense": {"interestexpense", "financecosts", "finansmangiderleri", "faizgiderleri"},
+        }
+        target = self._normalize_statement_label(kalem_name)
+        accepted = {self._normalize_statement_label(item) for item in aliases.get(target, {target})}
         for row in tablo:
-            if row.get('Kalem') == kalem_name:
-                # Get the latest date column (skip 'Kalem')
-                dates = [k for k in row.keys() if k != 'Kalem']
-                if dates:
-                    value = row[dates[0]]  # Most recent period
-                    if value is not None and not pd.isna(value):
-                        return float(value)
+            label = self._normalize_statement_label(row.get('Kalem', ''))
+            if label not in accepted:
+                continue
+            date_keys = [k for k in row.keys() if k != 'Kalem']
+            if not date_keys:
+                continue
+            # Provider tables are normally newest-first; preserve that ordering.
+            value = row.get(date_keys[0])
+            if value is None or pd.isna(value):
+                continue
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                logger.warning("Non-numeric value for statement item %s: %r", row.get('Kalem'), value)
+                return None
         return None
 
     def _assess_roe(self, roe_percent: float, market: str = "BIST") -> str:
