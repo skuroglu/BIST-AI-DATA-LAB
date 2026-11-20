@@ -4,6 +4,7 @@ Calculates financial ratios and metrics for value investing analysis.
 """
 
 import logging
+import unicodedata
 from typing import Optional, Dict, Any
 import pandas as pd
 
@@ -1952,6 +1953,151 @@ class FinancialRatiosProvider:
 
         return None
 
+    def _extract_first_available(self, tablo: list, field_names: list) -> Optional[float]:
+        """Return the first available statement value from an ordered list of labels."""
+        for field_name in field_names:
+            value = self._extract_field(tablo, field_name)
+            if value is not None:
+                return value
+        return None
+
+    def _is_bank_income_statement(self, income_result: Dict[str, Any]) -> bool:
+        """Detect bank-style BIST statements from their distinctive interest rows."""
+        rows = income_result.get('tablo', []) if isinstance(income_result, dict) else []
+        def normalize_label(value: Any) -> str:
+            value = unicodedata.normalize('NFKD', str(value)).casefold()
+            return ''.join(char for char in value if not unicodedata.combining(char))
+
+        labels = {
+            normalize_label(row.get('Kalem', ''))
+            for row in rows if isinstance(row, dict)
+        }
+        bank_markers = (
+            'faiz gelirleri',
+            'net faiz geliri/gideri',
+            'kredilerden alınan faizler',
+        )
+        return any(any(marker in label for label in labels) for marker in bank_markers)
+
+    async def _calculate_bank_core_health(self, ticker_kodu: str) -> Dict[str, Any]:
+        """Calculate only bank-relevant metrics; never apply industrial leverage/FCF scores."""
+        income_result = await self.data_provider.get_kar_zarar(
+            ticker_kodu=ticker_kodu, period_type='quarterly'
+        )
+        if income_result.get('error'):
+            return {'error': f"Income statement error: {income_result['error']}", 'ticker': ticker_kodu}
+
+        balance_result = await self.data_provider.get_bilanco(
+            ticker_kodu=ticker_kodu, period_type='quarterly'
+        )
+        if balance_result.get('error'):
+            return {'error': f"Balance sheet error: {balance_result['error']}", 'ticker': ticker_kodu}
+
+        income = income_result.get('tablo', [])
+        balance = balance_result.get('tablo', [])
+
+        net_income = self._extract_first_available(income, [
+            'XXIII. NET DÖNEM KARI/ZARARI (XVII+XXII)',
+            'XVII. SÜRDÜRÜLEN FAALİYETLER DÖNEM NET K/Z (XV±XVI)',
+            '16.4.2 Dönem Net Kar/Zararı',
+        ])
+        net_interest_income = self._extract_first_available(income, [
+            'III. NET FAİZ GELİRİ/GİDERİ (I - II)',
+            'III. NET FAİZ GELİRİ/GİDERİ',
+        ])
+        total_equity = self._extract_first_available(balance, [
+            'XVI. ÖZKAYNAKLAR', 'ÖZKAYNAKLAR',
+        ])
+        total_assets = self._extract_first_available(balance, [
+            'AKTİF TOPLAMI', 'AKTİF TOPLAMI (NET)',
+        ])
+        loans = self._extract_first_available(balance, [
+            '6.1 Krediler', 'VI. KREDİLER', 'KREDİLER',
+        ])
+        nonperforming_loans = self._extract_first_available(balance, [
+            '6.2 Takipteki Krediler', 'TAKİPTEKİ KREDİLER',
+        ])
+
+        if net_income is None or total_equity is None or total_equity <= 0:
+            return {
+                'error': 'Bankaya özgü ROE için dönem net kârı veya özkaynak verisi bulunamadı.',
+                'ticker': ticker_kodu,
+            }
+
+        # The source reports cumulative quarterly statements. Do not annualize this
+        # partial-period ratio or compare it to annual ROE thresholds.
+        reported_period_roe = (net_income / total_equity) * 100.0
+        equity_to_assets = (
+            (total_equity / total_assets) * 100.0
+            if total_assets is not None and total_assets > 0 else None
+        )
+
+        npl_ratio = None
+        npl_note = 'Takipteki kredi oranı hesaplanmadı: gerekli brüt kredi/takipteki kredi kalemleri güvenilir biçimde mevcut değil.'
+        if loans is not None and loans > 0 and nonperforming_loans is not None and nonperforming_loans > 0:
+            npl_ratio = (nonperforming_loans / (loans + nonperforming_loans)) * 100.0
+            npl_note = 'Takipteki krediler / (Krediler + Takipteki Krediler)'
+
+        roe_result = {
+            'roe_percent': round(reported_period_roe, 2),
+            'net_income': round(net_income, 2),
+            'total_equity': round(total_equity, 2),
+            'formula': 'Raporlanan dönem net kârı / dönem sonu özkaynak (yıllıklandırılmamıştır)',
+            'assessment': 'DÖNEMSEL — yıllık ROE olarak yorumlanmamalıdır',
+            'period_basis': 'Kaynağın bildirdiği son çeyrek/YTD dönemi; yıllıklandırılmamıştır',
+            'error': None,
+        }
+        bank_metrics = {
+            'net_interest_income': round(net_interest_income, 2) if net_interest_income is not None else None,
+            'reported_period_net_income': round(net_income, 2),
+            'equity_to_assets_percent': round(equity_to_assets, 2) if equity_to_assets is not None else None,
+            'nonperforming_loans': round(nonperforming_loans, 2) if nonperforming_loans is not None else None,
+            'loans': round(loans, 2) if loans is not None else None,
+            'npl_ratio_percent': round(npl_ratio, 2) if npl_ratio is not None else None,
+            'npl_ratio_note': npl_note,
+            'net_interest_margin': None,
+            'capital_adequacy_ratio': None,
+            'limitations': [
+                'Net faiz marjı için ortalama faiz getirili aktifler bu çıktıda doğrulanamadı.',
+                'Sermaye yeterlilik oranı bu finansal tablo kalemlerinden hesaplanamaz.',
+                'Dönemsel ROE yıllıklandırılmamıştır.',
+            ],
+        }
+        not_applicable = 'Bankalar için sanayi şirketi metriği olarak uygun değil; bu nedenle hesaplanmadı.'
+        bank_strengths = ['Banka finansal tabloları banka odaklı metriklerle değerlendirildi.']
+        if net_interest_income is not None:
+            bank_strengths.append(f"Net faiz geliri (raporlanan dönem): {net_interest_income:,.0f} TL")
+        if equity_to_assets is not None:
+            bank_strengths.append(f"Özkaynak / aktif oranı: {equity_to_assets:.2f}% (sermaye yeterlilik oranı değildir)")
+        if npl_ratio is not None:
+            bank_strengths.append(f"Takipteki kredi oranı: {npl_ratio:.2f}%")
+        else:
+            bank_strengths.append(npl_note)
+
+        return {
+            'ticker': ticker_kodu,
+            'period': 'quarterly',
+            'market': 'BIST',
+            'company_type': 'BANK',
+            'roe': roe_result,
+            'roic': {'error': not_applicable},
+            'debt_ratios': {
+                'debt_to_equity': None,
+                'debt_to_assets': None,
+                'interest_coverage': None,
+                'debt_service_coverage': None,
+                'error': not_applicable,
+            },
+            'fcf_margin': {'error': not_applicable},
+            'earnings_quality': {'error': not_applicable},
+            'bank_metrics': bank_metrics,
+            'overall_health_score': 'BANK_SPECIFIC — puanlama yapılmadı',
+            'strengths': bank_strengths,
+            'concerns': [],
+            'data_quality_notes': ' | '.join(bank_metrics['limitations']) + ' ' + npl_note,
+            'error': None,
+        }
+
     async def calculate_core_financial_health(self, ticker_kodu: str, market: str = "BIST") -> Dict[str, Any]:
         """
         Calculate Core Financial Health Analysis (5 metrics in 1 call).
@@ -1972,6 +2118,14 @@ class FinancialRatiosProvider:
         """
         try:
             logger.info(f"Calculating Core Financial Health for {ticker_kodu} (market={market})")
+
+            if market == "BIST":
+                detection_result = await self.data_provider.get_kar_zarar(
+                    ticker_kodu=ticker_kodu, period_type='quarterly'
+                )
+                if self._is_bank_income_statement(detection_result):
+                    logger.info(f"Bank statement detected for {ticker_kodu}; using bank-specific metrics")
+                    return await self._calculate_bank_core_health(ticker_kodu)
 
             # Calculate all 5 metrics using existing methods with market parameter
             # These methods handle their own data fetching efficiently
@@ -2181,6 +2335,47 @@ class FinancialRatiosProvider:
         """
         try:
             logger.info(f"Calculating Advanced Metrics for {ticker_kodu} (market={market})")
+
+            if market == "BIST":
+                detection_result = await self.data_provider.get_kar_zarar(
+                    ticker_kodu=ticker_kodu, period_type='quarterly'
+                )
+                if self._is_bank_income_statement(detection_result):
+                    logger.info(f"Bank statement detected for {ticker_kodu}; skipping Altman Z-Score")
+                    real_growth_revenue = await self.calculate_real_growth(ticker_kodu, 'revenue', market)
+                    real_growth_earnings = await self.calculate_real_growth(ticker_kodu, 'earnings', market)
+                    errors = []
+                    if real_growth_revenue.get('error'):
+                        errors.append(f"Revenue Growth: {real_growth_revenue['error']}")
+                    if real_growth_earnings.get('error'):
+                        errors.append(f"Earnings Growth: {real_growth_earnings['error']}")
+                    valid_growths = [
+                        item.get('real_growth_percent')
+                        for item in (real_growth_revenue, real_growth_earnings)
+                        if not item.get('error') and item.get('real_growth_percent') is not None
+                    ]
+                    if valid_growths:
+                        avg_growth = sum(valid_growths) / len(valid_growths)
+                        growth_quality = 'STRONG' if avg_growth > 10 else 'MODERATE' if avg_growth > 5 else 'WEAK' if avg_growth > 0 else 'NEGATIVE'
+                    else:
+                        growth_quality = 'UNKNOWN'
+                    key_findings = ['Banka olduğu için Altman Z-Score uygulanmadı.']
+                    if valid_growths:
+                        key_findings.append(f"Ortalama reel büyüme: {sum(valid_growths) / len(valid_growths):.2f}%")
+                    return {
+                        'ticker': ticker_kodu,
+                        'period': 'quarterly',
+                        'market': market,
+                        'company_type': 'BANK',
+                        'altman_z_score': None,
+                        'real_growth_revenue': real_growth_revenue,
+                        'real_growth_earnings': real_growth_earnings,
+                        'financial_stability': 'NOT_APPLICABLE_BANK',
+                        'growth_quality': growth_quality,
+                        'key_findings': key_findings,
+                        'data_quality_notes': ' | '.join(errors) if errors else 'Altman Z-Score banka sektöründe uygulanmadı.',
+                        'error': None,
+                    }
 
             # Calculate Altman Z-Score with market parameter
             altman_result = await self.calculate_altman_z_score(ticker_kodu, market)
