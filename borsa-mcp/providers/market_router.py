@@ -1739,19 +1739,22 @@ class MarketRouter:
             if ratio_set in [RatioSetType.CORE_HEALTH, RatioSetType.COMPREHENSIVE]:
                 try:
                     result = await self._client.calculate_core_financial_health(ticker)
-                    if result:
+                    if result and not result.get("error"):
                         roe_data = result.get("roe") or {}
                         roic_data = result.get("roic") or {}
                         debt_data = result.get("debt_ratios") or {}
                         fcf_data = result.get("fcf_margin") or {}
                         eq_data = result.get("earnings_quality") or {}
 
-                        roe_value = roe_data.get("roe_percent") / 100.0 if isinstance(roe_data, dict) and roe_data.get("roe_percent") else None
-                        roic_value = roic_data.get("roic_percent") / 100.0 if isinstance(roic_data, dict) and roic_data.get("roic_percent") else None
+                        roe_percent = roe_data.get("roe_percent") if isinstance(roe_data, dict) else None
+                        roic_percent = roic_data.get("roic_percent") if isinstance(roic_data, dict) else None
+                        fcf_percent = fcf_data.get("fcf_margin_percent") if isinstance(fcf_data, dict) else None
+                        roe_value = roe_percent / 100.0 if roe_percent is not None else None
+                        roic_value = roic_percent / 100.0 if roic_percent is not None else None
                         d_to_e = debt_data.get("debt_to_equity") if isinstance(debt_data, dict) else None
                         d_to_a = debt_data.get("debt_to_assets") if isinstance(debt_data, dict) else None
                         int_cov = debt_data.get("interest_coverage") if isinstance(debt_data, dict) else None
-                        fcf_value = fcf_data.get("fcf_margin_percent") / 100.0 if isinstance(fcf_data, dict) and fcf_data.get("fcf_margin_percent") else None
+                        fcf_value = fcf_percent / 100.0 if fcf_percent is not None else None
                         eq_value = eq_data.get("cf_to_earnings_ratio") if isinstance(eq_data, dict) else None
 
                         core_health = {
@@ -1766,20 +1769,28 @@ class MarketRouter:
                         }
                         insights.extend(result.get("strengths") or [])
                         ratio_warnings.extend(result.get("concerns") or [])
+                        if result.get("data_quality_notes"):
+                            ratio_warnings.append(result["data_quality_notes"])
+                    elif result and result.get("error"):
+                        ratio_warnings.append(f"Core health unavailable: {result['error']}")
                 except Exception as e:
                     ratio_warnings.append(f"Core health error: {str(e)}")
 
             if ratio_set in [RatioSetType.ADVANCED, RatioSetType.COMPREHENSIVE]:
                 try:
                     result = await self._client.calculate_advanced_metrics(ticker)
-                    if result:
+                    if result and not result.get("error"):
                         advanced = {
                             "altman_z_score": result.get("altman_z_score"),
                             "financial_stability": result.get("financial_stability"),
-                            "real_revenue_growth": result.get("real_revenue_growth"),
-                            "real_earnings_growth": result.get("real_earnings_growth"),
+                            "real_revenue_growth": result.get("real_growth_revenue"),
+                            "real_earnings_growth": result.get("real_growth_earnings"),
                             "growth_quality": result.get("growth_quality")
                         }
+                        if result.get("data_quality_notes"):
+                            ratio_warnings.append(result["data_quality_notes"])
+                    elif result and result.get("error"):
+                        ratio_warnings.append(f"Advanced metrics unavailable: {result['error']}")
                 except Exception as e:
                     ratio_warnings.append(f"Advanced metrics error: {str(e)}")
 
