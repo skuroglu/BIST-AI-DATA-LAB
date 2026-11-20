@@ -361,6 +361,14 @@ class BuffettAnalyzerProvider:
 
             # 5. Calculate real WACC using Fisher Effect
             r_real = ((1 + nominal_rate) / (1 + expected_inflation)) - 1 + risk_premium
+            if r_real <= terminal_growth_real:
+                raise ValueError(
+                    "DCF geçersiz: reel iskonto oranı terminal büyümeden "
+                    "büyük olmalıdır (r_real > terminal_growth_real). "
+                    f"r_real={r_real:.4f}, terminal_growth_real={terminal_growth_real:.4f}"
+                )
+            if r_real <= -1 or terminal_growth_real <= -1:
+                raise ValueError("DCF geçersiz: iskonto veya büyüme oranı -100% veya altında olamaz")
 
             # 6. Calculate annual OE
             oe_annual = owner_earnings_quarterly * 4
@@ -481,6 +489,37 @@ class BuffettAnalyzerProvider:
             logger.error(f"Error calculating safety margin: {e}")
             return {'error': str(e), 'safety_margin': 0}
 
+    @staticmethod
+    def _is_bank_company(ticker_kodu: str, company_info: Dict[str, Any], market: str = "BIST") -> bool:
+        """Return True only when the company can be identified as a bank.
+
+        Buffett Owner Earnings / industrial-style DCF in this provider is not
+        suitable for banks. Prefer explicit bank identifiers and Yahoo industry
+        metadata; do not classify every Financial Services company as a bank.
+        """
+        symbol = (ticker_kodu or "").upper().strip().replace(".IS", "")
+        bist_bank_symbols = {
+            "AKBNK", "ALBRK", "GARAN", "HALKB", "ICBCT", "ISCTR",
+            "KLNMA", "QNBTR", "SKBNK", "TSKB", "VAKBN", "YKBNK"
+        }
+        if market.upper() == "BIST" and symbol in bist_bank_symbols:
+            return True
+
+        industry = str(company_info.get("industry") or "").lower()
+        company_sector = str(company_info.get("sector") or "").lower()
+        bank_terms = (
+            "bank", "banking", "commercial banks", "regional banks",
+            "diversified banks", "investment banks"
+        )
+        if any(term in industry for term in bank_terms):
+            return True
+
+        # Some providers leave industry empty but expose a bank-specific sector.
+        if "bank" in company_sector:
+            return True
+
+        return False
+
     # --- Helper methods ---
 
     def _assess_oe_yield(self, oe_yield: float) -> str:
@@ -591,6 +630,45 @@ class BuffettAnalyzerProvider:
                     'market': market
                 }
 
+            # Identify banks before requesting statements. Bank financial
+            # statements may have missing cash-flow fields, and those fields
+            # must never be treated as industrial-company Owner Earnings.
+            logger.info(f"Fetching company info for {ticker_kodu}")
+            ticker = self.yfinance_provider._get_ticker(ticker_kodu, market=market)
+            company_info = ticker.info or {}
+
+            if self._is_bank_company(ticker_kodu, company_info, market):
+                industry = company_info.get('industry') or company_info.get('sector') or 'Banka'
+                logger.info(
+                    f"{ticker_kodu}: bank detected ({industry}); "
+                    "Buffett industrial valuation skipped"
+                )
+                return {
+                    'ticker': ticker_kodu,
+                    'period': 'N/A',
+                    'market': market,
+                    'company_type': 'BANK',
+                    'analysis_status': 'NOT_APPLICABLE',
+                    'valuation_model': 'BANK_SPECIFIC_REQUIRED',
+                    'buffett_score': 'NOT_APPLICABLE',
+                    'buffett_score_rationale': (
+                        'Banka olduğu için sanayi şirketlerine yönelik '
+                        'Owner Earnings / OE Yield / DCF modeli uygulanmadı. '
+                        'Banka özelinde ROE, net faiz marjı, sermaye yeterliliği, '
+                        'takipteki kredi oranı ve özkaynak kârlılığı analizi gerekir.'
+                    ),
+                    'key_insights': [],
+                    'warnings': [
+                        'Banka için sanayi tipi Buffett değerlemesi yapılmadı.',
+                        'Bu sonuç AL / STRONG_BUY sinyali olarak kullanılmamalıdır.'
+                    ],
+                    'data_quality_notes': (
+                        'Banka sınıflandırması şirket sembolü / sektör bilgisiyle yapıldı. '
+                        'Banka özelindeki finansal göstergeler bu sağlayıcıda hesaplanmıyor.'
+                    ),
+                    'error': None
+                }
+
             # Fetch income statement for net income
             logger.info(f"Fetching income statement for {ticker_kodu}")
             income_result = await self.yfinance_provider.get_kar_zarar(ticker_kodu, period_type='quarterly', market=market)
@@ -623,12 +701,6 @@ class BuffettAnalyzerProvider:
                     'period': 'N/A',
                     'market': market
                 }
-
-            # Fetch company info for market cap, current price, shares outstanding
-            # Note: We need to get raw info dict, not the Pydantic model
-            logger.info(f"Fetching company info for {ticker_kodu}")
-            ticker = self.yfinance_provider._get_ticker(ticker_kodu, market=market)
-            company_info = ticker.info
 
             # STEP 2: Extract required fields from financial statements
             # Get latest quarterly data (most recent column)
