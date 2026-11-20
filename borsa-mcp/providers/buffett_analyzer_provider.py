@@ -14,6 +14,8 @@ All calculations use dynamic parameters from:
 - World Bank: GDP growth (terminal_growth_real)
 """
 import logging
+import re
+import unicodedata
 from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -73,7 +75,7 @@ class BuffettAnalyzerProvider:
                 'depreciation': round(depreciation, 2),
                 'capex': round(capex, 2),
                 'working_capital_change': round(working_capital_change, 2),
-                'formula': 'OE = Net Income + Depreciation - CapEx - ΔWorking Capital',
+                'formula': 'OE = Net Income + Depreciation + CapEx (CapEx negatif nakit çıkışı) - ΔWorking Capital',
                 'birim': 'Milyon TL',
                 'notes': self._generate_oe_notes(owner_earnings, net_income, depreciation, capex, working_capital_change)
             }
@@ -709,46 +711,108 @@ class BuffettAnalyzerProvider:
             cashflow_data = cashflow_result.get('tablo', [])
             balance_data = balance_result.get('tablo', [])
 
-            # Helper function to extract value from financial statement list
+            # Explicit bilingual aliases. Missing data is represented by None, never zero.
+            def normalize_label(value: Any) -> str:
+                text = unicodedata.normalize("NFKD", str(value or ""))
+                text = "".join(ch for ch in text if not unicodedata.combining(ch)).lower().replace("ı", "i")
+                return re.sub(r"[^a-z0-9]+", "", text)
+
+            statement_aliases = {
+                'netincome': {'netincome', 'netprofit', 'netprofitloss', 'donemkari', 'donemnetkari', 'donemkarizarari'},
+                'depreciationandamortization': {'depreciationandamortization', 'depreciationdepletionandamortization', 'amortismanvegiderler', 'amortismanve itfa paylari', 'amortismanveitfapaylari'},
+                'capitalexpenditure': {'capitalexpenditure', 'capitalexpenditures', 'capex', 'maddiduranvarlikalimlari', 'maddi duranvarlikalimlari', 'maddi duran varlikalimlari'},
+                'currentassets': {'currentassets', 'donenvarliklar'},
+                'currentliabilities': {'currentliabilities', 'shorttermliabilities', 'kisavadeliyukumlulukler'},
+            }
+
+            def get_financial_series(data_list: List[Dict], field_name: str) -> Dict[str, float]:
+                """Return all valid dated values for a known statement item."""
+                target = normalize_label(field_name)
+                accepted = {normalize_label(item) for item in statement_aliases.get(target, {target})}
+                for row in data_list or []:
+                    if normalize_label(row.get('Kalem', '')) not in accepted:
+                        continue
+                    values = {}
+                    for period, raw_value in row.items():
+                        if period == 'Kalem' or raw_value is None:
+                            continue
+                        try:
+                            value = float(raw_value)
+                        except (TypeError, ValueError):
+                            continue
+                        if value == value:  # exclude NaN
+                            values[str(period)] = value
+                    return values
+                return {}
+
             def get_financial_value(data_list: List[Dict], field_name: str) -> tuple:
-                """Returns (latest_value, latest_period) for a financial field."""
-                for row in data_list:
-                    if row.get('Kalem') == field_name:
-                        # Get all date columns (exclude 'Kalem')
-                        date_columns = [k for k in row.keys() if k != 'Kalem']
-                        if date_columns:
-                            # Dates are sorted descending, so first is most recent
-                            latest_period = date_columns[0]
-                            latest_value = row.get(latest_period, 0)
-                            return latest_value, latest_period
-                return 0, None
+                """Returns (latest_value, latest_period), or (None, None) if absent."""
+                series = get_financial_series(data_list, field_name)
+                if not series:
+                    return None, None
+                # The statement provider orders columns newest-first; retain that order.
+                period = next(iter(series))
+                return series[period], period
 
-            # Extract net income (quarterly, in millions)
             net_income_raw, latest_period = get_financial_value(income_data, 'Net Income')
-            if not latest_period:
+            if latest_period is None:
+                return {'error': 'Net income data not available', 'ticker': ticker_kodu,
+                        'period': 'N/A', 'analysis_status': 'DATA_INSUFFICIENT',
+                        'buffett_score': 'DATA_INSUFFICIENT'}
+            net_income = net_income_raw / 1_000_000
+
+            depreciation_raw, depreciation_period = get_financial_value(cashflow_data, 'Depreciation And Amortization')
+            capex_raw, capex_period = get_financial_value(cashflow_data, 'Capital Expenditure')
+            missing_inputs = []
+            if depreciation_raw is None:
+                missing_inputs.append('Depreciation And Amortization')
+            if capex_raw is None:
+                missing_inputs.append('Capital Expenditure')
+            if missing_inputs:
                 return {
-                    'error': 'Net income data not available',
-                    'ticker': ticker_kodu,
-                    'period': 'N/A'
+                    'error': 'Owner Earnings hesaplanamadı; gerekli nakit akışı kalemleri eksik: ' + ', '.join(missing_inputs),
+                    'ticker': ticker_kodu, 'period': latest_period, 'market': market,
+                    'analysis_status': 'DATA_INSUFFICIENT', 'buffett_score': 'DATA_INSUFFICIENT',
+                    'buffett_score_rationale': 'Eksik nakit akışı verisi nedeniyle AVOID kararı üretilmedi.',
+                    'warnings': ['Eksik finansal kalemler: ' + ', '.join(missing_inputs)],
+                    'data_quality_notes': 'Eksik alanlar sıfır kabul edilmedi; Owner Earnings ve DCF hesaplanmadı.'
                 }
-            net_income = net_income_raw / 1_000_000  # Convert to millions
-
-            # Extract depreciation
-            depreciation_raw, _ = get_financial_value(cashflow_data, 'Depreciation And Amortization')
+            if depreciation_period != capex_period:
+                return {
+                    'error': f'Cash flow dönemleri uyuşmuyor: depreciation={depreciation_period}, capex={capex_period}',
+                    'ticker': ticker_kodu, 'period': latest_period, 'market': market,
+                    'analysis_status': 'DATA_INSUFFICIENT', 'buffett_score': 'DATA_INSUFFICIENT',
+                    'data_quality_notes': 'Farklı dönemlere ait nakit akışı kalemleri birleştirilmedi.'
+                }
             depreciation = depreciation_raw / 1_000_000
-
-            # Extract capex (negative value)
-            capex_raw, _ = get_financial_value(cashflow_data, 'Capital Expenditure')
             capex = capex_raw / 1_000_000
 
-            # Calculate working capital change
-            current_assets_raw, _ = get_financial_value(balance_data, 'Current Assets')
-            current_liabilities_raw, _ = get_financial_value(balance_data, 'Current Liabilities')
-
-            # Get previous period values for working capital calculation
-            # For now, use 0 as a conservative estimate (could be enhanced to get historical data)
-            working_capital_change = 0
-            logger.warning("Working capital change set to 0 (historical comparison not implemented yet)")
+            # Change in non-cash working capital is calculated only when two aligned
+            # balance-sheet periods are available; otherwise stop rather than assume zero.
+            current_assets_series = get_financial_series(balance_data, 'Current Assets')
+            current_liabilities_series = get_financial_series(balance_data, 'Current Liabilities')
+            common_periods = [p for p in current_assets_series if p in current_liabilities_series]
+            if len(common_periods) >= 2:
+                current_period, previous_period = common_periods[0], common_periods[1]
+                if current_period != latest_period:
+                    # Use the latest common balance-sheet period only if it is the same
+                    # reporting date as the income statement; otherwise data is misaligned.
+                    if current_period != latest_period:
+                        return {
+                            'error': f'Bilanço ve gelir tablosu dönemleri uyuşmuyor: income={latest_period}, balance={current_period}',
+                            'ticker': ticker_kodu, 'period': latest_period, 'market': market,
+                            'analysis_status': 'DATA_INSUFFICIENT', 'buffett_score': 'DATA_INSUFFICIENT',
+                            'data_quality_notes': 'Çalışma sermayesi farklı raporlama döneminden hesaplanmadı.'
+                        }
+                working_capital_change = ((current_assets_series[current_period] - current_liabilities_series[current_period]) -
+                                          (current_assets_series[previous_period] - current_liabilities_series[previous_period])) / 1_000_000
+            else:
+                return {
+                    'error': 'Owner Earnings hesaplanamadı; çalışma sermayesi değişimi için en az iki bilanço dönemi gerekli.',
+                    'ticker': ticker_kodu, 'period': latest_period, 'market': market,
+                    'analysis_status': 'DATA_INSUFFICIENT', 'buffett_score': 'DATA_INSUFFICIENT',
+                    'data_quality_notes': 'Çalışma sermayesi değişimi sıfır varsayılmadı; yeterli bilanço geçmişi yok.'
+                }
 
             # Extract market cap (in millions), current price, shares outstanding
             market_cap = company_info.get('marketCap', 0) / 1_000_000
@@ -817,6 +881,7 @@ class BuffettAnalyzerProvider:
                     'period': latest_period,
                     'market': market,
                     'owner_earnings': oe_result,
+                    'analysis_status': 'ANALYZED',
                     'buffett_score': 'AVOID',
                     'buffett_score_rationale': rationale,
                     'key_insights': [],
