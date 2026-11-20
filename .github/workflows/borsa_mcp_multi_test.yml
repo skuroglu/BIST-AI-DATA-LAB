@@ -36,7 +36,7 @@ jobs:
           from unified_mcp_server import app
 
           async def main():
-              tickers = ["GARAN", "ISCTR", "AKBNK", "TSKB"]
+              tickers = ["GARAN", "ISCTR", "AKBNK", "TSKB", "ASELS"]
 
               async with Client(app) as client:
 
