@@ -720,27 +720,36 @@ class BuffettAnalyzerProvider:
             statement_aliases = {
                 'netincome': {'netincome', 'netprofit', 'netprofitloss', 'donemkari', 'donemnetkari', 'donemkarizarari', 'donemnetkarizarari', 'sur durulenfaaliyetlerdonemkarizarari'},
                 'depreciationandamortization': {'depreciationandamortization', 'depreciationdepletionandamortization', 'amortismanvegiderler', 'amortismanveitfapaylari', 'amortismanitfapaylari', 'amortismangiderleri'},
-                'capitalexpenditure': {'capitalexpenditure', 'capitalexpenditures', 'capex', 'maddiduranvarlikalimlari', 'maddiduranvarlikalimlari', 'sabitsermayeyatirimlari'},
+                'capitalexpenditure': {'capitalexpenditure', 'capitalexpenditures', 'capex', 'maddiduranvarlikalimlari', 'sabitsermayeyatirimlari'},
                 'currentassets': {'currentassets', 'donenvarliklar'},
                 'currentliabilities': {'currentliabilities', 'shorttermliabilities', 'kisavadeliyukumlulukler'},
             }
 
-            def get_financial_series(data_list: List[Dict], field_name: str) -> Dict[str, float]:
-                """Return all valid dated values for a known statement item."""
+            def get_financial_series(data_list: Any, field_name: str) -> Dict[str, float]:
+                """Return dated values from normalized rows or raw Borsapy data."""
                 target = normalize_label(field_name)
                 accepted = {normalize_label(item) for item in statement_aliases.get(target, {target})}
+                if isinstance(data_list, dict) and isinstance(data_list.get('data'), dict):
+                    periods = data_list.get('periods') or []
+                    for label, values in data_list['data'].items():
+                        if normalize_label(label) in accepted and isinstance(values, (list, tuple)):
+                            return {str(periods[i]): float(v) for i, v in enumerate(values)
+                                    if i < len(periods) and v is not None and str(v).lower() != 'nan'}
+                    return {}
+                if isinstance(data_list, list) and len(data_list) == 1 and isinstance(data_list[0], dict) and isinstance(data_list[0].get('data'), dict):
+                    return get_financial_series(data_list[0], field_name)
                 for row in data_list or []:
-                    if normalize_label(row.get('Kalem', '')) not in accepted:
+                    if not isinstance(row, dict) or normalize_label(row.get('Kalem', row.get('kalem', ''))) not in accepted:
                         continue
                     values = {}
                     for period, raw_value in row.items():
-                        if period == 'Kalem' or raw_value is None:
+                        if str(period).lower() in {'kalem', 'label', 'name'} or raw_value is None:
                             continue
                         try:
                             value = float(raw_value)
                         except (TypeError, ValueError):
                             continue
-                        if value == value:  # exclude NaN
+                        if value == value:
                             values[str(period)] = value
                     return values
                 return {}
