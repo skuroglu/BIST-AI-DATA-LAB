@@ -723,6 +723,8 @@ class BuffettAnalyzerProvider:
                 'capitalexpenditure': {'capitalexpenditure', 'capitalexpenditures', 'capex', 'maddiduranvarlikalimlari', 'sabitsermayeyatirimlari'},
                 'currentassets': {'currentassets', 'donenvarliklar'},
                 'currentliabilities': {'currentliabilities', 'shorttermliabilities', 'kisavadeliyukumlulukler'},
+                'cashandcashequivalents': {'cashandcashequivalents', 'cashcash equivalents', 'cashandshortterminvestments', 'nakitvenakitbenzerleri', 'nakitbenzerleri'},
+                'currentdebt': {'currentdebt', 'shorttermdebt', 'shorttermborrowings', 'currentportionoflongtermdebt', 'shorttermloandebt', 'kisavadelifinansalborclar', 'kisa vadeli borclanmalar'},
             }
 
             def get_financial_series(data_list: Any, field_name: str) -> Dict[str, float]:
@@ -804,32 +806,59 @@ class BuffettAnalyzerProvider:
             depreciation = depreciation_raw / 1_000_000
             capex = capex_raw / 1_000_000
 
-            # Change in non-cash working capital is calculated only when two aligned
-            # balance-sheet periods are available; otherwise stop rather than assume zero.
+            # Buffett Owner Earnings uses the change in OPERATING (non-cash)
+            # working capital, not total current assets minus total current liabilities.
+            # Exclude cash/cash equivalents from current assets and short-term
+            # interest-bearing debt from current liabilities to avoid treating
+            # financing balances as operating working capital.
             current_assets_series = get_financial_series(balance_data, 'Current Assets')
             current_liabilities_series = get_financial_series(balance_data, 'Current Liabilities')
-            common_periods = [p for p in current_assets_series if p in current_liabilities_series]
-            if len(common_periods) >= 2:
-                current_period, previous_period = common_periods[0], common_periods[1]
-                if current_period != latest_period:
-                    # Use the latest common balance-sheet period only if it is the same
-                    # reporting date as the income statement; otherwise data is misaligned.
-                    if current_period != latest_period:
-                        return {
-                            'error': f'Bilanço ve gelir tablosu dönemleri uyuşmuyor: income={latest_period}, balance={current_period}',
-                            'ticker': ticker_kodu, 'period': latest_period, 'market': market,
-                            'analysis_status': 'DATA_INSUFFICIENT', 'buffett_score': 'DATA_INSUFFICIENT',
-                            'data_quality_notes': 'Çalışma sermayesi farklı raporlama döneminden hesaplanmadı.'
-                        }
-                working_capital_change = ((current_assets_series[current_period] - current_liabilities_series[current_period]) -
-                                          (current_assets_series[previous_period] - current_liabilities_series[previous_period])) / 1_000_000
-            else:
+            cash_series = get_financial_series(balance_data, 'Cash And Cash Equivalents')
+            current_debt_series = get_financial_series(balance_data, 'Current Debt')
+
+            missing_wc_fields = []
+            if not current_assets_series:
+                missing_wc_fields.append('Current Assets')
+            if not current_liabilities_series:
+                missing_wc_fields.append('Current Liabilities')
+            if not cash_series:
+                missing_wc_fields.append('Cash And Cash Equivalents')
+            if not current_debt_series:
+                missing_wc_fields.append('Current Debt / Short-Term Debt')
+            if missing_wc_fields:
                 return {
-                    'error': 'Owner Earnings hesaplanamadı; çalışma sermayesi değişimi için en az iki bilanço dönemi gerekli.',
+                    'error': 'Owner Earnings hesaplanamadı; faaliyet işletme sermayesi için gerekli bilanço kalemleri eksik: ' + ', '.join(missing_wc_fields),
                     'ticker': ticker_kodu, 'period': latest_period, 'market': market,
                     'analysis_status': 'DATA_INSUFFICIENT', 'buffett_score': 'DATA_INSUFFICIENT',
-                    'data_quality_notes': 'Çalışma sermayesi değişimi sıfır varsayılmadı; yeterli bilanço geçmişi yok.'
+                    'buffett_score_rationale': 'Eksik bilanço kalemleri nedeniyle hatalı Owner Earnings üretilmedi.',
+                    'warnings': ['Eksik bilanço kalemleri: ' + ', '.join(missing_wc_fields)],
+                    'data_quality_notes': 'Nakit ve kısa vadeli finansal borç ayrıştırılamadığı için işletme sermayesi değişimi hesaplanmadı.'
                 }
+
+            common_periods = [p for p in current_assets_series
+                              if p in current_liabilities_series and p in cash_series and p in current_debt_series]
+            if len(common_periods) < 2:
+                return {
+                    'error': 'Owner Earnings hesaplanamadı; faaliyet işletme sermayesi için aynı tarihlere ait en az iki bilanço dönemi gerekli.',
+                    'ticker': ticker_kodu, 'period': latest_period, 'market': market,
+                    'analysis_status': 'DATA_INSUFFICIENT', 'buffett_score': 'DATA_INSUFFICIENT',
+                    'data_quality_notes': 'Eksik veya eşleşmeyen bilanço dönemleri nedeniyle çalışma sermayesi sıfır varsayılmadı.'
+                }
+
+            current_period, previous_period = common_periods[0], common_periods[1]
+            if current_period != latest_period:
+                return {
+                    'error': f'Bilanço ve gelir tablosu dönemleri uyuşmuyor: income={latest_period}, balance={current_period}',
+                    'ticker': ticker_kodu, 'period': latest_period, 'market': market,
+                    'analysis_status': 'DATA_INSUFFICIENT', 'buffett_score': 'DATA_INSUFFICIENT',
+                    'data_quality_notes': 'Çalışma sermayesi farklı raporlama döneminden hesaplanmadı.'
+                }
+
+            def operating_working_capital(period: str) -> float:
+                return (current_assets_series[period] - cash_series[period]) - (current_liabilities_series[period] - current_debt_series[period])
+
+            working_capital_change = (operating_working_capital(current_period) -
+                                      operating_working_capital(previous_period)) / 1_000_000
 
             # Extract market cap (in millions), current price, shares outstanding
             market_cap = company_info.get('marketCap', 0) / 1_000_000
