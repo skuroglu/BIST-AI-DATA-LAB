@@ -272,6 +272,104 @@ class YahooFinanceProvider:
             logger.exception(f"Error fetching historical data from yfinance for {ticker_kodu}")
             return {"error": str(e)}
     
+    async def get_intraday_ohlc(
+        self,
+        ticker_kodu: str,
+        interval: str = "5m",
+        period: str = "1d",
+        market: str = "BIST",
+        auto_adjust: bool = False
+    ) -> Dict[str, Any]:
+        """Fetch raw intraday OHLCV candles without token-optimizer resampling.
+
+        This method is intentionally separate from get_finansal_veri so that
+        short-term price confirmation keeps the original candle interval.
+        Supported intervals are restricted to commonly used Yahoo Finance
+        intraday intervals; for the BIST alarm, use 5m and 1d.
+        """
+        try:
+            allowed_intervals = {"1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h"}
+            allowed_periods = {"1d", "5d", "1mo", "3mo", "6mo", "1y", "2y"}
+
+            interval = str(interval).strip().lower()
+            period = str(period).strip().lower()
+            ticker_kodu = str(ticker_kodu).strip().upper()
+
+            if not ticker_kodu:
+                return {"error": "Hisse kodu bos olamaz", "veri_noktalari": []}
+            if interval not in allowed_intervals:
+                return {
+                    "error": f"Desteklenmeyen zaman araligi: {interval}",
+                    "izin_verilen_araliklar": sorted(allowed_intervals),
+                    "veri_noktalari": []
+                }
+            if period not in allowed_periods:
+                return {
+                    "error": f"Desteklenmeyen periyot: {period}",
+                    "izin_verilen_periyotlar": sorted(allowed_periods),
+                    "veri_noktalari": []
+                }
+
+            ticker = self._get_ticker(ticker_kodu, market=market)
+            hist_df = ticker.history(
+                period=period,
+                interval=interval,
+                auto_adjust=auto_adjust,
+                prepost=False
+            )
+
+            if hist_df is None or hist_df.empty:
+                return {
+                    "ticker": ticker_kodu,
+                    "market": market.upper(),
+                    "interval": interval,
+                    "period": period,
+                    "veri_noktalari": [],
+                    "veri_sayisi": 0,
+                    "uyari": "Yahoo Finance bu hisse icin secilen aralikta gun ici veri dondurmedi."
+                }
+
+            required_columns = {"Open", "High", "Low", "Close", "Volume"}
+            missing_columns = required_columns.difference(hist_df.columns)
+            if missing_columns:
+                return {
+                    "error": "Yahoo Finance verisinde gerekli OHLCV alanlari eksik",
+                    "eksik_alanlar": sorted(missing_columns),
+                    "veri_noktalari": []
+                }
+
+            veri_noktalari = []
+            for index, row in hist_df.iterrows():
+                values = [row["Open"], row["High"], row["Low"], row["Close"], row["Volume"]]
+                if any(pd.isna(value) for value in values):
+                    continue
+
+                timestamp = index.to_pydatetime() if hasattr(index, "to_pydatetime") else index
+                veri_noktalari.append({
+                    "tarih": timestamp,
+                    "acilis": float(row["Open"]),
+                    "en_yuksek": float(row["High"]),
+                    "en_dusuk": float(row["Low"]),
+                    "kapanis": float(row["Close"]),
+                    "hacim": int(row["Volume"])
+                })
+
+            return {
+                "ticker": ticker_kodu,
+                "market": market.upper(),
+                "interval": interval,
+                "period": period,
+                "veri_noktalari": veri_noktalari,
+                "veri_sayisi": len(veri_noktalari),
+                "ham_veri": True,
+                "token_optimizasyonu_uygulandi": False,
+                "zaman_dilimi": self._get_timezone(market)
+            }
+
+        except Exception as e:
+            logger.exception(f"Error fetching intraday OHLCV data from yfinance for {ticker_kodu}")
+            return {"error": str(e), "ticker": ticker_kodu, "veri_noktalari": []}
+
     async def get_analist_verileri(self, ticker_kodu: str, market: str = "BIST") -> Dict[str, Any]:
         """Fetches analyst recommendations, price targets, and recommendation trends."""
         try:
