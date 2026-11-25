@@ -400,6 +400,44 @@ async def get_quote(
 
 
 @app.tool(
+    name="get_intraday_ohlc",
+    title="Intraday 5m/15m OHLCV Candles",
+    description="Get raw intraday OHLCV candles for BIST shares from Yahoo Finance. Does not downsample or apply token optimization.",
+    tags={"stocks", "bist", "intraday", "ohlcv"},
+    output_schema=None,
+    annotations={"readOnlyHint": True, "idempotentHint": True}
+)
+async def get_intraday_ohlc(
+    symbol: Annotated[str, Field(
+        description="BIST share code, without .IS suffix (for example AKSA, GARAN, ASELS).",
+        examples=["AKSA", "GARAN", "ASELS"]
+    )],
+    interval: Annotated[Literal["5m", "15m"], Field(
+        description="Intraday candle interval. Use 5m for short-term confirmation.",
+        default="5m"
+    )] = "5m",
+    period: Annotated[Literal["1d", "5d"], Field(
+        description="Yahoo Finance intraday lookback period.",
+        default="1d"
+    )] = "1d",
+) -> str:
+    """Return raw 5-minute or 15-minute BIST OHLCV candles."""
+    logger.info(
+        f"get_intraday_ohlc: symbol='{symbol}', interval='{interval}', period='{period}'"
+    )
+    try:
+        return shape(await market_router.get_intraday_ohlc(
+            symbol=symbol,
+            market=MarketType.BIST,
+            interval=interval,
+            period=period,
+        ))
+    except Exception as e:
+        logger.exception(f"Error in get_intraday_ohlc for '{symbol}'")
+        raise classify_tool_error(e, "Intraday OHLCV fetch") from e
+
+
+@app.tool(
     name="get_historical_data",
     title="Historical Price Data",
     description="Get OHLCV price history with date range or period (1d-5y). Supports BIST, US, and crypto.",
