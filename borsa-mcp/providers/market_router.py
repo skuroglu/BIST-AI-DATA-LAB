@@ -104,9 +104,12 @@ class MarketRouter:
     """Routes unified tool requests to appropriate market-specific providers."""
 
     def __init__(self):
-        """Initialize the market router with borsa_client as the underlying service layer."""
+        """Initialize the market router and its dedicated intraday price provider."""
         from borsa_client import BorsaApiClient
+        from providers.yfinance_provider import YahooFinanceProvider
         self._client = BorsaApiClient()
+        # Intraday candles bypass BorsaApiClient/TokenOptimizer so 5m bars stay raw.
+        self._intraday_provider = YahooFinanceProvider()
 
     # --- Helper Methods ---
 
@@ -484,6 +487,60 @@ class MarketRouter:
                 warnings=warnings
             ),
             "data": data
+        }
+
+    # --- Intraday OHLCV (raw candles; no token optimization) ---
+
+    async def get_intraday_ohlc(
+        self,
+        symbol: str,
+        market: MarketType,
+        interval: str = "5m",
+        period: str = "1d",
+    ) -> Dict[str, Any]:
+        """Fetch raw intraday OHLCV candles from Yahoo Finance for BIST symbols."""
+        if market != MarketType.BIST:
+            raise ValueError("get_intraday_ohlc currently supports only BIST shares.")
+
+        result = await self._intraday_provider.get_intraday_ohlc(
+            ticker_kodu=symbol,
+            interval=interval,
+            period=period,
+            market="BIST",
+            auto_adjust=False,
+        )
+        if result.get("error"):
+            raise RuntimeError(result["error"])
+
+        return {
+            "metadata": self._create_metadata(
+                market, symbol, "yfinance_intraday",
+                successful=1 if result.get("veri_sayisi", 0) else 0,
+                failed=0 if result.get("veri_sayisi", 0) else 1,
+                warnings=[result["uyari"]] if result.get("uyari") else [],
+            ),
+            "symbol": symbol.upper(),
+            "interval": result.get("interval", interval),
+            "period": result.get("period", period),
+            "timezone": result.get("zaman_dilimi", "Europe/Istanbul"),
+            "raw_candles": True,
+            "data_points": result.get("veri_sayisi", 0),
+            "data": [
+                {
+                    "date": (
+                        row["tarih"].isoformat()
+                        if hasattr(row.get("tarih"), "isoformat")
+                        else str(row.get("tarih"))
+                    ),
+                    "open": row.get("acilis"),
+                    "high": row.get("en_yuksek"),
+                    "low": row.get("en_dusuk"),
+                    "close": row.get("kapanis"),
+                    "volume": sanitize_volume(row.get("hacim")),
+                }
+                for row in result.get("veri_noktalari", [])
+            ],
+            "warnings": [result["uyari"]] if result.get("uyari") else [],
         }
 
     # --- Historical Data ---
